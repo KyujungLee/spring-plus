@@ -24,4 +24,10 @@ public class UserController {
     public void changePassword(@Auth AuthUser authUser, @RequestBody UserChangePasswordRequest userChangePasswordRequest) {
         userService.changePassword(authUser.getId(), userChangePasswordRequest);
     }
+
+    // 기존 유저도 닉네임 추가할 수 있도록 API 작성
+    @PatchMapping("/users")
+    public void updateNickname(@Auth AuthUser authUser, @RequestParam String nickname){
+        userService.updateNickname(authUser.getId(), nickname);
+    }
 }

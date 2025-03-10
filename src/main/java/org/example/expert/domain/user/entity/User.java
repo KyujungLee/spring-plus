@@ -20,6 +20,7 @@ public class User extends Timestamped {
     private String password;
     @Enumerated(EnumType.STRING)
     private UserRole userRole;
+    private String nickname; // nickname 필드 추가
 
     public User(String email, String password, UserRole userRole) {
         this.email = email;
@@ -44,4 +45,7 @@ public class User extends Timestamped {
     public void updateRole(UserRole userRole) {
         this.userRole = userRole;
     }
+
+    // 유저 nickname 업데이트 매서드 추가
+    public void updateNickname(String nickname){ this.nickname = nickname; }
 }
