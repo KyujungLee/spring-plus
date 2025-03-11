@@ -19,7 +19,7 @@ public interface TodoRepository extends JpaRepository<Todo, Long> {
     // 조건검색 JPQL (조건이 null 이면 where 을 건너뜀)
     @Query("""
         select t from Todo t left join fetch t.user u
-        where (:weather is null or t.weather = :weather) 
+        where (:weather is null or t.weather = :weather)
         and (:startTime is null or t.modifiedAt >= :startTime)
         and (:endTime is null or t.modifiedAt <= :endTime)
         """)

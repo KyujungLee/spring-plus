@@ -1,7 +1,8 @@
 # SPRING PLUS
 
 ## Lv.1 코드 개선 퀴즈 - @Transactional 의 이해
-파일위치 :  
+
+- 파일위치 :  
 package org.example.expert.domain.todo.service.TodoService
 ---
 
@@ -14,42 +15,10 @@ jakarta.servlet.ServletException: Request processing failed: org.springframework
 - 데이터가 변경되어야 할 메서드까지 클래스 단계에서 전역적으로 @Transactional(readOnly = true)가 설정되어 있어, JPA Insert 문이 실행되지 않음.
 
 ### 2. 해결
-![img.png](img.png)
+![img.png](images/img.png)
 1. 데이터의 변경, 조회, 삭제가 진행되는 매서드에 @Transactional 작성. (조회 매서드는 readOnly = Ture 설정)
 
-## Before
-
-```java
-@Service
-@RequiredArgsConstructor
-@Transactional(readOnly = true)  // <- 해당 클래스의 모든 매서드 전역설정
-public class TodoService {
-
-    /**
-     * 트랜잭션 상에서 쿼리가 실행되어야 할 매서드까지 @Transactional(readOnly = true) 가 설정되어 있음.
-     */
-    public TodoSaveResponse saveTodo(AuthUser authUser, TodoSaveRequest todoSaveRequest) {
-        // 비즈니스 로직...
-        Todo savedTodo = todoRepository.save(newTodo);
-        // 비즈니스 로직...   
-    }
-    
-    public Page<TodoResponse> getTodos(int page, int size) {
-        // 비즈니스 로직...
-        Page<Todo> todos = todoRepository.findAllByOrderByModifiedAtDesc(pageable);
-        // 비즈니스 로직...
-    }
-
-    public TodoResponse getTodo(long todoId) {
-        // 비즈니스 로직...
-        Todo todo = todoRepository.findByIdWithUser(todoId)
-                .orElseThrow(() -> new InvalidRequestException("Todo not found"));
-        // 비즈니스 로직...
-    }
-}
-```
-
-## After
+## Fixed
 
 ```java
 @Service
@@ -85,7 +54,8 @@ public class TodoService {
 ```
 
 ## Lv.2 코드 추가 퀴즈 - JWT의 이해
-파일위치 :  
+
+- 파일위치 :  
 package org.example.expert.domain.user.entity.User  
 package org.example.expert.domain.user.service.UserService  
 package org.example.expert.domain.user.controller.UserController  
@@ -99,15 +69,15 @@ package org.example.expert.domain.auth.service.AuthService
 2. 프론트엔드 개발자 요구사항 : JWT에서 nickname 을 꺼내 보여주길 원함.
 
 ### 2. 해결
-![img_6.png](img_6.png)
-![img_7.png](img_7.png)
+![img_6.png](images/img_6.png)
+![img_7.png](images/img_7.png)
 
 
 1. User Entity에 nickname 필드 추가.
 2. 컨트롤러와 서비스에 nickname 업데이트 기능을 추가하여, 기존 사용자도 문제없이 추가 할 수 있도록 수정.
 3. JWT에 해당 nickname 추가. (JwtUtil, AuthService)
 
-## Addition
+## Fixed
 
 ```java
 @Getter
@@ -232,7 +202,8 @@ public class AuthService {
 ```
 
 ## 3. 코드 개선 퀴즈 - JPA의 이해
-파일위치:  
+
+- 파일위치:  
 package org.example.expert.domain.todo.controller.TodoController  
 package org.example.expert.domain.todo.service.TodoService  
 package org.example.expert.domain.todo.repository.TodoRepository
@@ -244,11 +215,11 @@ package org.example.expert.domain.todo.repository.TodoRepository
 3. 기획자 요구사항 : JPQL 사용
 
 ### 2. 해결
-![img_8.png](img_8.png)
+![img_8.png](images/img_8.png)
 1. weather 와 수정일 쿼리 파라미터로 받을 수 있도록 추가
 2. JPQL에서, 각 조건이 null이면 where 을 건너뛰도록 작성
 
-## Change
+## Fixed
 ```java
 @RestController
 @RequiredArgsConstructor
@@ -320,5 +291,49 @@ public interface TodoRepository extends JpaRepository<Todo, Long> {
     
     //...
 }
+```
 
+## 4. 테스트 코드 퀴즈 - 컨트롤러 테스트의 이해
+
+파일위치:  
+package org.example.expert.domain.todo.controller.TodoControllerTest
+
+---
+
+### 1. 원인
+1. 기존 테스트 코드에서는, 에러 발생 상황에서 성공에 관한 검증을 진행함. 
+
+### 2. 해결
+1. 매서드명에 맞게 에러 상황에 대해 검증한다.
+
+## Fixed
+```java
+@WebMvcTest(TodoController.class)
+class TodoControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockBean
+    private TodoService todoService;
+
+    // ...
+    
+    @Test
+    void todo_단건_조회_시_todo가_존재하지_않아_예외가_발생한다() throws Exception {
+        // given
+        long todoId = 1L;
+
+        // when
+        when(todoService.getTodo(todoId))
+                .thenThrow(new InvalidRequestException("Todo not found"));
+
+        // then
+        mockMvc.perform(get("/todos/{todoId}", todoId))
+                .andExpect(status().is4xxClientError())
+                .andExpect(jsonPath("$.status").value(HttpStatus.BAD_REQUEST.name()))
+                .andExpect(jsonPath("$.code").value(HttpStatus.BAD_REQUEST.value()))
+                .andExpect(jsonPath("$.message").value("Todo not found"));
+    }
+}
 ```
