@@ -381,3 +381,37 @@ public class AdminAccessLoggingAspect {
     }
 }
 ```
+
+## 6. JPA Cascade
+
+파일위치:  
+package org.example.expert.domain.todo.entity.Todo
+
+---
+
+### 1. 원인
+1. 서비스 코드에서는 Todo 저장 시 작성자를 이용해 생성한 Manager 객체도 같이 저장하는 척을 함.
+2. 하지만 해당 매니저 객체는 영속성 컨텍스트에 포함된 적이 없어서, 실제 Manager Table 에는 저장되지 않음.
+
+### 2. 해결
+![img_1.png](images/img_9.png)
+1. 해당 매니저 객체를 영속성 컨텍스트에 포함시켜 Manager Table 에 저장하기 위해 CascadeType.PERSIST 설정.
+
+## Fixed
+```java
+@Getter
+@Entity
+@NoArgsConstructor
+@Table(name = "todos")
+public class Todo extends Timestamped {
+
+    // ...
+    
+    // 매니저 객체를 영속성 컨텍스트에서 관리하기위해 CascadeType.PERSIST 설정
+    // Todo 를 save 할 시, managers도 같이 Persist 됨.
+    @OneToMany(mappedBy = "todo", cascade = CascadeType.PERSIST)
+    private List<Manager> managers = new ArrayList<>();
+    
+    // ...
+}
+```
