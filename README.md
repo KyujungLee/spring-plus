@@ -341,7 +341,7 @@ class TodoControllerTest {
 ## 5. 코드 개선 퀴즈 - AOP의 이해
 
 파일위치:  
-package org.example.expert.aop;
+package org.example.expert.aop.AdminAccessLoggingAspect
 
 ---
 
