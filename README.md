@@ -337,3 +337,47 @@ class TodoControllerTest {
     }
 }
 ```
+
+## 5. 코드 개선 퀴즈 - AOP의 이해
+
+파일위치:  
+package org.example.expert.aop;
+
+---
+
+### 1. 원인
+1. 기존 코드에서는, Advice가 @After 로 설정되어 있어 PointCut 의 컨트롤러 매서드 실행 후 동작하도록 설정됨.
+2. AOP 매서드명에 맞는 PointCut 도 아님.
+
+### 2. 해결
+```text
+2025-03-11T15:24:53.504+09:00  INFO 22044 --- [nio-8080-exec-5] o.e.expert.aop.AdminAccessLoggingAspect  : Admin Access Log - User ID: 3, Request Time: 2025-03-11T15:24:53.504117800, Request URL: /admin/users/1, Method: changeUserRole
+Hibernate: select u1_0.id,u1_0.created_at,u1_0.email,u1_0.modified_at,u1_0.nickname,u1_0.password,u1_0.user_role from users u1_0 where u1_0.id=?
+Hibernate: update users set email=?,modified_at=?,nickname=?,password=?,user_role=? where id=?
+```
+1. 요구사항은 해당 컨트롤러 실행 전 AOP 동작이니, Advice를 @Before 로 바꿈.
+2. AOP 매서드명에 맞게 PointCut 수정
+
+## Fixed
+```java
+@Slf4j
+@Aspect
+@Component
+@RequiredArgsConstructor
+public class AdminAccessLoggingAspect {
+
+    private final HttpServletRequest request;
+
+    // 컨트롤러 실행 전 동작해야 하므로 @After 를 @Before 로 바꿈
+    // 매서드명에 맞는 PointCut 수정
+    @Before("execution(* org.example.expert.domain.user.controller.UserAdminController.changeUserRole(..))")
+    public void logAfterChangeUserRole(JoinPoint joinPoint) {
+        String userId = String.valueOf(request.getAttribute("userId"));
+        String requestUrl = request.getRequestURI();
+        LocalDateTime requestTime = LocalDateTime.now();
+
+        log.info("Admin Access Log - User ID: {}, Request Time: {}, Request URL: {}, Method: {}",
+                userId, requestTime, requestUrl, joinPoint.getSignature().getName());
+    }
+}
+```
