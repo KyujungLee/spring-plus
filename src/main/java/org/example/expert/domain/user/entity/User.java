@@ -22,10 +22,12 @@ public class User extends Timestamped {
     private UserRole userRole;
     private String nickname; // nickname 필드 추가
 
-    public User(String email, String password, UserRole userRole) {
+
+    public User(String email, String password, UserRole userRole, String nickname) {
         this.email = email;
         this.password = password;
         this.userRole = userRole;
+        this.nickname = nickname; // 생성자에 nickname 추가
     }
 
     private User(Long id, String email, UserRole userRole) {

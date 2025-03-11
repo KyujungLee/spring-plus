@@ -3,6 +3,7 @@
 ## Lv.1 코드 개선 퀴즈 - @Transactional 의 이해
 파일위치 :  
 package org.example.expert.domain.todo.service.TodoService
+---
 
 ### 1. 원인
 (A) 에러 원문
@@ -13,6 +14,7 @@ jakarta.servlet.ServletException: Request processing failed: org.springframework
 - 데이터가 변경되어야 할 메서드까지 클래스 단계에서 전역적으로 @Transactional(readOnly = true)가 설정되어 있어, JPA Insert 문이 실행되지 않음.
 
 ### 2. 해결
+![img.png](img.png)
 1. 데이터의 변경, 조회, 삭제가 진행되는 매서드에 @Transactional 작성. (조회 매서드는 readOnly = Ture 설정)
 
 ## Before
@@ -88,14 +90,19 @@ package org.example.expert.domain.user.entity.User
 package org.example.expert.domain.user.service.UserService  
 package org.example.expert.domain.user.controller.UserController  
 package org.example.expert.config.JwtUtil  
+package org.example.expert.domain.auth.dto.request.SignupRequest  
 package org.example.expert.domain.auth.service.AuthService
-
+---
 
 ### 1. 원인
 1. 기획자의 요구사항 : User 정보에 nickname 추가.
 2. 프론트엔드 개발자 요구사항 : JWT에서 nickname 을 꺼내 보여주길 원함.
 
 ### 2. 해결
+![img_6.png](img_6.png)
+![img_7.png](img_7.png)
+
+
 1. User Entity에 nickname 필드 추가.
 2. 컨트롤러와 서비스에 nickname 업데이트 기능을 추가하여, 기존 사용자도 문제없이 추가 할 수 있도록 수정.
 3. JWT에 해당 nickname 추가. (JwtUtil, AuthService)
@@ -108,16 +115,16 @@ package org.example.expert.domain.auth.service.AuthService
 @NoArgsConstructor
 @Table(name = "users")
 public class User extends Timestamped {
-
-    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-    @Column(unique = true)
-    private String email;
-    @Enumerated(EnumType.STRING)
-    private UserRole userRole;
+    //...
+    
     private String nickname; // nickname 필드 추가
 
-    // ...
+    public User(String email, String password, UserRole userRole, String nickname) {
+        this.email = email;
+        this.password = password;
+        this.userRole = userRole;
+        this.nickname = nickname; // 생성자에 nickname 추가
+    }
     
     // 유저 nickname 업데이트 매서드 추가
     public void updateNickname(String nickname){
@@ -186,6 +193,17 @@ public class JwtUtil {
     // ...
 }
 ```
+
+```java
+@Getter
+@NoArgsConstructor
+@AllArgsConstructor
+public class SignupRequest {
+
+    // ...
+    private String nickname; // RequestDto에 닉네임 추가
+}
+```
 ```java
 @Service
 @RequiredArgsConstructor
@@ -211,4 +229,96 @@ public class AuthService {
         // ...
     }
 }
+```
+
+## 3. 코드 개선 퀴즈 - JPA의 이해
+파일위치:  
+package org.example.expert.domain.todo.controller.TodoController  
+package org.example.expert.domain.todo.service.TodoService  
+package org.example.expert.domain.todo.repository.TodoRepository
+---
+### 1. 원인
+
+1. 기획자 요구사항 : 할 일 검색 시 weather 조건으로 검색
+2. 기획자 요구사항 : 할 일 검색 시 수정일 기준 기간검색
+3. 기획자 요구사항 : JPQL 사용
+
+### 2. 해결
+![img_8.png](img_8.png)
+1. weather 와 수정일 쿼리 파라미터로 받을 수 있도록 추가
+2. JPQL에서, 각 조건이 null이면 where 을 건너뛰도록 작성
+
+## Change
+```java
+@RestController
+@RequiredArgsConstructor
+public class TodoController {
+
+    // ...
+
+    // 날씨, 수정일 조건검색 추가
+    @GetMapping("/todos")
+    public ResponseEntity<Page<TodoResponse>> getTodos(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String weather, LocalDateTime startTime, LocalDateTime endTime
+    ) {
+        return ResponseEntity.ok(todoService.getTodos(page, size, weather, startTime, endTime));
+    }
+    
+    // ...
+}
+```
+```java
+@Service
+@RequiredArgsConstructor
+//@Transactional(readOnly = true)  // 전역 설정 주석처리
+public class TodoService {
+
+    // ...
+    
+    @Transactional(readOnly = true) // 조회는 readOnry = true 설정
+    public Page<TodoResponse> getTodos(int page, int size, String weather, LocalDateTime startTime, LocalDateTime endTime) {
+        Pageable pageable = PageRequest.of(page - 1, size);
+
+        // 조건검색(날씨별, 기간별)
+        List<Todo> todos = todoRepository.findTodosByWeatherAndModifiedAt(weather, startTime, endTime);
+
+        // 페이징 처리
+        Page<Todo> pageTodos = new PageImpl<>(todos, pageable, todos.size());
+
+        return pageTodos.map(todo -> new TodoResponse(
+                todo.getId(),
+                todo.getTitle(),
+                todo.getContents(),
+                todo.getWeather(),
+                new UserResponse(todo.getUser().getId(), todo.getUser().getEmail()),
+                todo.getCreatedAt(),
+                todo.getModifiedAt()
+        ));
+    }
+    
+    // ...
+}
+```
+```java
+public interface TodoRepository extends JpaRepository<Todo, Long> {
+    // ...
+    
+    // 조건검색 JPQL (조건이 null 이면 where 을 건너뜀)
+    @Query("""
+        select t from Todo t left join fetch t.user u
+        where (:weather is null or t.weather = :weather) 
+        and (:startTime is null or t.modifiedAt >= :startTime)
+        and (:endTime is null or t.modifiedAt <= :endTime)
+        """)
+    List<Todo> findTodosByWeatherAndModifiedAt(
+            @Param("weather") String weather,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+    
+    //...
+}
+
 ```
