@@ -415,3 +415,30 @@ public class Todo extends Timestamped {
     // ...
 }
 ```
+
+## 7. N+1
+
+파일위치:  
+package org.example.expert.domain.comment.repository.CommentRepository
+
+---
+
+### 1. 원인
+1. getComments 서비스 매서드에서 댓글들을 조회할 때, 유저를 같이 로드하지 않아 발생하는 문제.
+2. 유저가 로드된 게 없으므로, 각 댓글의 유저를 가져올 때마다 유저를 로드하는 쿼리가 발생.
+
+### 2. 해결
+```text
+Hibernate: select c1_0.id,c1_0.contents,c1_0.created_at,c1_0.modified_at,c1_0.todo_id,c1_0.user_id,u1_0.id,u1_0.created_at,u1_0.email,u1_0.modified_at,u1_0.nickname,u1_0.password,u1_0.user_role from comments c1_0 join users u1_0 on u1_0.id=c1_0.user_id where c1_0.todo_id=?
+```
+1. 댓글들을 조회할 때 유저도 같이 한꺼번에 로드되도록 JPQL 쿼리 수정.
+
+## Fixed
+```java
+public interface CommentRepository extends JpaRepository<Comment, Long> {
+
+    // user 도 한꺼번에 로드하기 위해 JPQL 에 join fetch 적용 
+    @Query("SELECT c FROM Comment c JOIN FETCH c.user WHERE c.todo.id = :todoId")
+    List<Comment> findByTodoIdWithUser(@Param("todoId") Long todoId);
+}
+```
