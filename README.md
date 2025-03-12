@@ -639,3 +639,172 @@ public class TodoService {
     // ...
 }
 ```
+
+## Lv.9 Spring Security
+
+파일위치:  
+package org.example.expert.domain.user.enums.UserRole  
+package org.example.expert.domain.common.dto.AuthUser
+package org.example.expert.config.JwtAuthenticationToken
+package org.example.expert.config.JwtAuthenticationFilter
+package org.example.expert.config.SecurityConfig  
+---
+
+### 1. 원인
+1. 요구사항 : 기존 `Filter`와 `Argument Resolver`를 사용하던 코드들을 Spring Security로 변경.
+2. 접근 권한 및 유저 권한 기능 그대로 유지
+3. 토큰 기반 인증 방식은 JWT 로 유지
+
+### 2. 해결
+1. UserRole : Security 에서 사용할 수 있게 "ROLE_" prefix 부착
+2. AuthUser : Authority 를 복수로 받을 수 있도록 List로 변경
+3. JwtAuthenticationToken : Jwt 인증토큰 생성 (컨트롤러에서 @AuthenticationPrincipal 로써 사용)
+4. JwtAuthenticationFilter : Jwt 검증 수행 (SecurityContext 에 토큰 등록)
+5. SecurityConfig : SecurityFilter 등록 (login, signup 기능은 필터링 하지않음 / 관리자 기능은 @Secured(UserRole.Authority.ADMIN) 붙여서, 관리자만 작동할 수 있게 작성)
+
+- 기존 WebConfig / JwtFilter / FilterConfig / AuthUserArgumentResolver 소프트딜리트 (주석처리)
+
+## Fixed
+```java
+@Getter
+@RequiredArgsConstructor
+public enum UserRole {
+    ROLE_USER(Authority.USER),
+    ROLE_ADMIN(Authority.ADMIN);
+
+    private final String userRole;
+
+    public static UserRole of(String role) {
+        return Arrays.stream(UserRole.values())
+                .filter(r -> r.name().equalsIgnoreCase(role))
+                .findFirst()
+                .orElseThrow(() -> new InvalidRequestException("유효하지 않은 UerRole"));
+    }
+
+    // Security 에서 사용할 수 있게 "ROLE_" prefix 부착
+    public static class Authority {
+        public static final String USER = "ROLE_USER";
+        public static final String ADMIN = "ROLE_ADMIN";
+    }
+}
+```
+```java
+@Getter
+public class AuthUser {
+
+    private final Long userId;
+    private final String email;
+    private final Collection<? extends GrantedAuthority> authorities;
+
+    // Authority 를 복수로 받을 수 있도록 List로 변경
+    public AuthUser(Long userId, String email, UserRole userRole) {
+        this.userId = userId;
+        this.email = email;
+        this.authorities = List.of(new SimpleGrantedAuthority(userRole.name()));
+    }
+}
+```
+```java
+public class JwtAuthenticationToken extends AbstractAuthenticationToken {
+
+    private final AuthUser authUser;
+
+    public JwtAuthenticationToken(AuthUser authUser){
+        super(authUser.getAuthorities());
+        this.authUser = authUser;
+        setAuthenticated(true);
+    }
+
+    @Override
+    public Object getCredentials(){
+        return null;
+    }
+
+    @Override
+    public Object getPrincipal(){
+        return authUser;
+    }
+}
+```
+```java
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private final JwtUtil jwtUtil;
+
+    @Override
+    protected void doFilterInternal(
+            HttpServletRequest httpRequest,
+            @NonNull HttpServletResponse httpResponse,
+            @NonNull FilterChain chain
+    ) throws ServletException, IOException {
+        String authorizationHeader = httpRequest.getHeader("Authorization");
+
+        if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
+            String jwt = jwtUtil.substringToken(authorizationHeader);
+            try {
+                Claims claims = jwtUtil.extractClaims(jwt);
+
+                if (SecurityContextHolder.getContext().getAuthentication() == null) {
+                    setAuthentication(claims);
+                }
+            } catch (SecurityException | MalformedJwtException e) {
+                log.error("Invalid JWT signature, 유효하지 않는 JWT 서명 입니다.", e);
+                httpResponse.sendError(HttpServletResponse.SC_UNAUTHORIZED, "유효하지 않는 JWT 서명입니다.");
+            } catch (ExpiredJwtException e) {
+                log.error("Expired JWT token, 만료된 JWT token 입니다.", e);
+                httpResponse.sendError(HttpServletResponse.SC_UNAUTHORIZED, "만료된 JWT 토큰입니다.");
+            } catch (UnsupportedJwtException e) {
+                log.error("Unsupported JWT token, 지원되지 않는 JWT 토큰 입니다.", e);
+                httpResponse.sendError(HttpServletResponse.SC_BAD_REQUEST, "지원되지 않는 JWT 토큰입니다.");
+            } catch (Exception e) {
+                log.error("Internal server error", e);
+                httpResponse.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            }
+        }
+        chain.doFilter(httpRequest, httpResponse);
+    }
+    private void setAuthentication(Claims claims) {
+        Long userId = Long.valueOf(claims.getSubject());
+        String email = claims.get("email", String.class);
+        UserRole userRole = UserRole.of(claims.get("userRole", String.class));
+
+        AuthUser authUser = new AuthUser(userId, email, userRole);
+        JwtAuthenticationToken authenticationToken = new JwtAuthenticationToken(authUser);
+        SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+    }
+}
+```
+```java
+@Configuration
+@RequiredArgsConstructor
+@EnableWebSecurity
+@EnableMethodSecurity(securedEnabled = true)
+public class SecurityConfig {
+
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception{
+        return http
+                .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+                .addFilterBefore(jwtAuthenticationFilter, SecurityContextHolderAwareRequestFilter.class)
+                .formLogin(AbstractHttpConfigurer::disable)
+                .anonymous(AbstractHttpConfigurer::disable)
+                .httpBasic(AbstractHttpConfigurer::disable)
+                .logout(AbstractHttpConfigurer::disable)
+                .rememberMe(AbstractHttpConfigurer::disable)
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(request -> request.getRequestURI().startsWith("/auth")).permitAll()
+                        .requestMatchers("/admin").hasAuthority(UserRole.Authority.ADMIN)
+                        .anyRequest().authenticated()
+                )
+                .build();
+    }
+}
+```
