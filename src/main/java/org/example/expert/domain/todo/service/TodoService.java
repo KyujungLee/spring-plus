@@ -12,14 +12,12 @@ import org.example.expert.domain.todo.repository.TodoRepository;
 import org.example.expert.domain.user.dto.response.UserResponse;
 import org.example.expert.domain.user.entity.User;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -60,25 +58,17 @@ public class TodoService {
         Pageable pageable = PageRequest.of(page - 1, size);
 
         // 조건검색(날씨별, 기간별)
-        List<Todo> todos = todoRepository.findTodosByWeatherAndModifiedAt(weather, startTime, endTime);
+        //List<Todo> todos = todoRepository.findTodosByWeatherAndModifiedAt(weather, startTime, endTime);
 
-        // 페이징 처리
-        Page<Todo> pageTodos = new PageImpl<>(todos, pageable, todos.size());
-
-        return pageTodos.map(todo -> new TodoResponse(
-                todo.getId(),
-                todo.getTitle(),
-                todo.getContents(),
-                todo.getWeather(),
-                new UserResponse(todo.getUser().getId(), todo.getUser().getEmail()),
-                todo.getCreatedAt(),
-                todo.getModifiedAt()
-        ));
+        return todoRepository.findTodosByWeatherAndModifiedAtWithPages(weather, startTime, endTime, pageable);
     }
 
     @Transactional(readOnly = true) // 조회는 readOnry = true 설정
     public TodoResponse getTodo(long todoId) {
-        Todo todo = todoRepository.findByIdWithUser(todoId)
+//        Todo todo = todoRepository.findByIdWithUser(todoId)
+//                .orElseThrow(() -> new InvalidRequestException("Todo not found"));
+        // QueryDSL 로 변경
+        Todo todo = todoRepository.findTodoByIdWithUser(todoId)
                 .orElseThrow(() -> new InvalidRequestException("Todo not found"));
 
         User user = todo.getUser();

@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-public interface TodoRepository extends JpaRepository<Todo, Long> {
+public interface TodoRepository extends JpaRepository<Todo, Long>, TodoRepositoryQuery {
 
     @Query("SELECT t FROM Todo t LEFT JOIN FETCH t.user u ORDER BY t.modifiedAt DESC")
     Page<Todo> findAllByOrderByModifiedAtDesc(Pageable pageable);
@@ -33,4 +33,5 @@ public interface TodoRepository extends JpaRepository<Todo, Long> {
             "LEFT JOIN t.user " +
             "WHERE t.id = :todoId")
     Optional<Todo> findByIdWithUser(@Param("todoId") Long todoId);
+
 }

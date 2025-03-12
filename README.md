@@ -201,7 +201,7 @@ public class AuthService {
 }
 ```
 
-## 3. 코드 개선 퀴즈 - JPA의 이해
+## Lv.3 코드 개선 퀴즈 - JPA의 이해
 
 - 파일위치:  
 package org.example.expert.domain.todo.controller.TodoController  
@@ -293,7 +293,7 @@ public interface TodoRepository extends JpaRepository<Todo, Long> {
 }
 ```
 
-## 4. 테스트 코드 퀴즈 - 컨트롤러 테스트의 이해
+## Lv.4 테스트 코드 퀴즈 - 컨트롤러 테스트의 이해
 
 파일위치:  
 package org.example.expert.domain.todo.controller.TodoControllerTest
@@ -338,7 +338,7 @@ class TodoControllerTest {
 }
 ```
 
-## 5. 코드 개선 퀴즈 - AOP의 이해
+## Lv.5 코드 개선 퀴즈 - AOP의 이해
 
 파일위치:  
 package org.example.expert.aop.AdminAccessLoggingAspect
@@ -382,7 +382,7 @@ public class AdminAccessLoggingAspect {
 }
 ```
 
-## 6. JPA Cascade
+## Lv.6 JPA Cascade
 
 파일위치:  
 package org.example.expert.domain.todo.entity.Todo
@@ -416,7 +416,7 @@ public class Todo extends Timestamped {
 }
 ```
 
-## 7. N+1
+## Lv.7 N+1
 
 파일위치:  
 package org.example.expert.domain.comment.repository.CommentRepository
@@ -440,5 +440,202 @@ public interface CommentRepository extends JpaRepository<Comment, Long> {
     // user 도 한꺼번에 로드하기 위해 JPQL 에 join fetch 적용 
     @Query("SELECT c FROM Comment c JOIN FETCH c.user WHERE c.todo.id = :todoId")
     List<Comment> findByTodoIdWithUser(@Param("todoId") Long todoId);
+}
+```
+
+## Lv.8 QueryDSL
+
+파일위치:  
+build.gradle  
+package org.example.expert.config.QueryDSLConfig  
+package org.example.expert.domain.todo.repository.TodoRepository  
+package org.example.expert.domain.todo.repository.TodoRepositoryQuery  
+package org.example.expert.domain.todo.repository.TodoRepositoryQueryImpl  
+package org.example.expert.domain.todo.service.TodoService
+
+---
+
+### 1. 원인
+```java
+public interface TodoRepository extends JpaRepository<Todo, Long> {
+
+    // ...
+    @Query("SELECT t FROM Todo t " +
+            "LEFT JOIN t.user " +
+            "WHERE t.id = :todoId")
+    Optional<Todo> findByIdWithUser(@Param("todoId") Long todoId);
+}
+```
+1. 요구사항 : JPQL로 작성된 `findByIdWithUser`를 QueryDSL로 변경
+2. N+1 문제가 발생하지 않아야 함.
+
+### 2. 해결
+1. build.gradle 에 의존성 추가
+2. TodoRepositoryQuery 인터페이스 작성 (TodoRepository에 상속)
+3. TodoRepositoryQueryImple 클래스 작성
+4. TodoService 에 해당 매서드 적용
+
+## Fixed
+```text
+    // ...
+
+dependencies {
+ 
+    // ...
+     
+    // QueryDSL
+    implementation 'com.querydsl:querydsl-jpa:5.1.0:jakarta'
+    annotationProcessor "com.querydsl:querydsl-apt:${dependencyManagement.importedProperties['querydsl.version']}:jakarta"
+    annotationProcessor "jakarta.annotation:jakarta.annotation-api"
+    annotationProcessor "jakarta.persistence:jakarta.persistence-api"
+}
+
+    // ...
+```
+```java
+@Configuration
+public class QueryDSLConfig {
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    @Bean
+    public JPAQueryFactory jpaQueryFactory(){
+        return new JPAQueryFactory(entityManager);
+    }
+}
+```
+```java
+public interface TodoRepository extends JpaRepository<Todo, Long>, TodoRepositoryQuery {
+}
+```
+```java
+public interface TodoRepositoryQuery {
+
+    Optional<Todo> findTodoByIdWithUser(Long id);
+}
+```
+```java
+@RequiredArgsConstructor
+public class TodoRepositoryQueryImpl implements TodoRepositoryQuery {
+
+    private final JPAQueryFactory jpaQueryFactory;
+    
+    @Override
+    public Optional<Todo> findTodoByIdWithUser(Long id) {
+        Todo result = jpaQueryFactory
+                .selectFrom(todo)
+                .leftJoin(todo.user, user).fetchJoin()
+                .where(todo.id.eq(id))
+                .fetchOne();
+
+        return Optional.ofNullable(result);
+    }
+}
+
+```
+```java
+@Service
+@RequiredArgsConstructor
+//@Transactional(readOnly = true)  // 전역 설정 주석처리
+public class TodoService {
+
+    // ...
+    
+    @Transactional(readOnly = true) // 조회는 readOnry = true 설정
+    public TodoResponse getTodo(long todoId) {
+//        Todo todo = todoRepository.findByIdWithUser(todoId)
+//                .orElseThrow(() -> new InvalidRequestException("Todo not found"));
+        // QueryDSL 로 변경
+        Todo todo = todoRepository.findTodoByIdWithUser(todoId)
+                .orElseThrow(() -> new InvalidRequestException("Todo not found"));
+
+        User user = todo.getUser();
+
+        return new TodoResponse(
+                todo.getId(),
+                todo.getTitle(),
+                todo.getContents(),
+                todo.getWeather(),
+                new UserResponse(user.getId(), user.getEmail()),
+                todo.getCreatedAt(),
+                todo.getModifiedAt()
+        );
+    }
+}
+```
+
+## Addition
+- Lv.3 문제도 QueryDSL로 개선
+
+```java
+@RequiredArgsConstructor
+public class TodoRepositoryQueryImpl implements TodoRepositoryQuery {
+
+    private final JPAQueryFactory jpaQueryFactory;
+
+    // ...
+    
+    @Override
+    public Page<TodoResponse> findTodosByWeatherAndModifiedAtWithPages(String weather, LocalDateTime startTime, LocalDateTime endTime, Pageable pageable) {
+        List<TodoResponse> result = jpaQueryFactory
+                .select(
+                        Projections.constructor(
+                                TodoResponse.class,
+                                todo.id,
+                                todo.title,
+                                todo.contents,
+                                todo.weather,
+                                Projections.constructor(UserResponse.class, user.id, user.email),
+                                todo.createdAt,
+                                todo.modifiedAt
+                        )
+                )
+                .from(todo)
+                .leftJoin(todo.user, user)
+                .where(
+                        weather != null ? todo.weather.eq(weather) : null,
+                        startTime != null ? todo.modifiedAt.goe(startTime) : null,
+                        endTime != null ? todo.modifiedAt.goe(endTime) : null
+                )
+                .offset(pageable.getOffset())
+                .limit(pageable.getPageSize())
+                .fetch();
+
+        Long total = jpaQueryFactory
+                .select(todo.count())
+                .from(todo)
+                .where(
+                        weather != null ? todo.weather.eq(weather) : null,
+                        startTime != null ? todo.modifiedAt.goe(startTime) : null,
+                        endTime != null ? todo.modifiedAt.goe(endTime) : null
+                )
+                .fetchOne();
+
+        return new PageImpl<>(result, pageable, total != null ? total : 0L);
+    }
+}
+```
+```java
+@Service
+@RequiredArgsConstructor
+//@Transactional(readOnly = true)  // 전역 설정 주석처리
+public class TodoService {
+
+    private final TodoRepository todoRepository;
+
+    // ...
+
+    @Transactional(readOnly = true) // 조회는 readOnry = true 설정
+    public Page<TodoResponse> getTodos(int page, int size, String weather, LocalDateTime startTime, LocalDateTime endTime) {
+        Pageable pageable = PageRequest.of(page - 1, size);
+
+        // 조건검색(날씨별, 기간별)
+        //List<Todo> todos = todoRepository.findTodosByWeatherAndModifiedAt(weather, startTime, endTime);
+
+        return todoRepository.findTodosByWeatherAndModifiedAtWithPages(weather, startTime, endTime, pageable);
+    }
+    
+    // ...
 }
 ```
