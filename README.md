@@ -596,7 +596,7 @@ public class TodoRepositoryQueryImpl implements TodoRepositoryQuery {
                 .where(
                         weather != null ? todo.weather.eq(weather) : null,
                         startTime != null ? todo.modifiedAt.goe(startTime) : null,
-                        endTime != null ? todo.modifiedAt.goe(endTime) : null
+                        endTime != null ? todo.modifiedAt.loe(endTime) : null
                 )
                 .offset(pageable.getOffset())
                 .limit(pageable.getPageSize())
@@ -608,7 +608,7 @@ public class TodoRepositoryQueryImpl implements TodoRepositoryQuery {
                 .where(
                         weather != null ? todo.weather.eq(weather) : null,
                         startTime != null ? todo.modifiedAt.goe(startTime) : null,
-                        endTime != null ? todo.modifiedAt.goe(endTime) : null
+                        endTime != null ? todo.modifiedAt.loe(endTime) : null
                 )
                 .fetchOne();
 
@@ -644,9 +644,8 @@ public class TodoService {
 
 파일위치:  
 package org.example.expert.domain.user.enums.UserRole  
-package org.example.expert.domain.common.dto.AuthUser
-package org.example.expert.config.JwtAuthenticationToken
-package org.example.expert.config.JwtAuthenticationFilter
+package org.example.expert.config.JwtAuthenticationToken  
+package org.example.expert.config.JwtAuthenticationFilter  
 package org.example.expert.config.SecurityConfig  
 ---
 
@@ -657,10 +656,9 @@ package org.example.expert.config.SecurityConfig
 
 ### 2. 해결
 1. UserRole : Security 에서 사용할 수 있게 "ROLE_" prefix 부착
-2. AuthUser : Authority 를 복수로 받을 수 있도록 List로 변경
-3. JwtAuthenticationToken : Jwt 인증토큰 생성 (컨트롤러에서 @AuthenticationPrincipal 로써 사용)
-4. JwtAuthenticationFilter : Jwt 검증 수행 (SecurityContext 에 토큰 등록)
-5. SecurityConfig : SecurityFilter 등록 (login, signup 기능은 필터링 하지않음 / 관리자 기능은 @Secured(UserRole.Authority.ADMIN) 붙여서, 관리자만 작동할 수 있게 작성)
+2. JwtAuthenticationToken : Jwt 인증토큰 생성 (컨트롤러에서 @AuthenticationPrincipal 로써 사용)
+3. JwtAuthenticationFilter : Jwt 검증 수행 (SecurityContext 에 토큰 등록)
+4. SecurityConfig : SecurityFilter 등록 (login, signup 기능은 필터링 하지않음 / 관리자 기능은 @Secured(UserRole.Authority.ADMIN) 붙여서, 관리자만 작동할 수 있게 작성)
 
 - 기존 WebConfig / JwtFilter / FilterConfig / AuthUserArgumentResolver 소프트딜리트 (주석처리)
 
@@ -685,22 +683,6 @@ public enum UserRole {
     public static class Authority {
         public static final String USER = "ROLE_USER";
         public static final String ADMIN = "ROLE_ADMIN";
-    }
-}
-```
-```java
-@Getter
-public class AuthUser {
-
-    private final Long userId;
-    private final String email;
-    private final Collection<? extends GrantedAuthority> authorities;
-
-    // Authority 를 복수로 받을 수 있도록 List로 변경
-    public AuthUser(Long userId, String email, UserRole userRole) {
-        this.userId = userId;
-        this.email = email;
-        this.authorities = List.of(new SimpleGrantedAuthority(userRole.name()));
     }
 }
 ```
@@ -805,6 +787,247 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .build();
+    }
+}
+```
+
+## Lv.10 QueryDSL 을 사용하여 검색 기능 만들기
+
+파일위치:  
+package org.example.expert.domain.todo.repository.TodoRepository  
+package org.example.expert.domain.todo.repository.TodoRepositoryImpl  
+package org.example.expert.domain.todo.service.TodoService  
+package org.example.expert.domain.todo.controller.TodoController  
+package org.example.expert.domain.todo.repository.TodoRepositoryQueryImplTest
+
+---
+
+### 1. 원인
+1. 요구사항 : 일정검색기능을 가진 API 개발
+2. 제목검색(부분일치) + 생성일 범위 검색 + 담당자 닉네임 검색(부분일치)
+3. 검색된 일정은 생성일 기준 최신순 정렬 (페이징 처리)
+4. 반환내용 : 일정 제목 + 담당자 수 + 총 댓글 개수
+
+### 2. 해결
+1. BooleanBuilder : where 조건 설정
+2. Projections.constructor() : DTO 변환
+3. TodoRepositoryQueryImplTest : Repository 테스트코드 통과
+
+## Fixed
+```java
+@RestController
+@RequiredArgsConstructor
+public class TodoController {
+
+    private final TodoService todoService;
+
+    // ...
+    
+    @GetMapping("/todos/search")
+    public ResponseEntity<Page<TodoSearchResponse>> searchTodos(
+            @RequestParam(required = false)
+            String keywordTitle, LocalDateTime startTime, LocalDateTime endTime, String keywordNickname,
+            @PageableDefault(page = 1, size = 10)
+            Pageable pageable
+    ) {
+        return ResponseEntity.ok(todoService.searchTodos(keywordTitle, startTime, endTime, keywordNickname, pageable));
+    }
+}
+```
+```java
+@Service
+@RequiredArgsConstructor
+public class TodoService {
+
+    private final TodoRepository todoRepository;
+
+    // ...
+    
+    public Page<TodoSearchResponse> searchTodos(
+            String keywordTitle, LocalDateTime startTime, LocalDateTime endTime, String keywordNickname,
+            Pageable pageable
+    ) {
+        Pageable convertPageable = PageRequest.of(pageable.getPageNumber() - 1, pageable.getPageSize());
+
+        return todoRepository.searchTodosByTitleAndCreatedAtAndManagers(
+                keywordTitle, startTime, endTime, keywordNickname, convertPageable
+        );
+    }
+}
+```
+```java
+public interface TodoRepositoryQuery {
+
+    // ...
+    
+    Page<TodoSearchResponse> searchTodosByTitleAndCreatedAtAndManagers(
+            String keywordTitle, LocalDateTime startTime, LocalDateTime endTime, String keywordNickname,
+            Pageable convertPageable
+    );
+}
+```
+```java
+@RequiredArgsConstructor
+public class TodoRepositoryQueryImpl implements TodoRepositoryQuery {
+
+    private final JPAQueryFactory jpaQueryFactory;
+
+    // ...
+    
+    @Override
+    public Page<TodoSearchResponse> searchTodosByTitleAndCreatedAtAndManagers(
+            String keywordTitle, LocalDateTime startTime, LocalDateTime endTime, String keywordNickname,
+            Pageable pageable
+    ) {
+        // 조건 생성: 제목, 생성일 범위, 담당자 닉네임 (부분 일치)
+        BooleanBuilder condition = new BooleanBuilder();
+        if (keywordTitle != null && !keywordTitle.isEmpty()) {
+            condition.and(todo.title.contains(keywordTitle));
+        }
+        if (startTime != null) {
+            condition.and(todo.createdAt.goe(startTime));
+        }
+        if (endTime != null) {
+            condition.and(todo.createdAt.loe(endTime));
+        }
+        if (keywordNickname != null && !keywordNickname.isEmpty()) {
+            // todo와 연관된 매니저의 User의 nickname 조건
+            condition.and(manager.user.nickname.contains(keywordNickname));
+        }
+
+        // 실제 데이터 조회 쿼리
+        List<TodoSearchResponse> content = jpaQueryFactory
+                .select(Projections.constructor(
+                        TodoSearchResponse.class,
+                        todo.title,                                // 일정 제목
+                        manager.id.countDistinct(),                // 담당자 수 (중복 제거)
+                        comment.id.countDistinct()                 // 총 댓글 개수 (중복 제거)
+                ))
+                .from(todo)
+                // 매니저와 매니저의 user join (담당자 닉네임 조건 및 담당자 수 집계)
+                .leftJoin(todo.managers, manager)
+                .leftJoin(manager.user, user)
+                // 댓글 join (댓글 수 집계)
+                .leftJoin(todo.comments, comment)
+                .where(condition)
+                // 그룹화: todo의 고유값과 선택된 컬럼만 그룹화 (기본키와 제목, 생성일)
+                .groupBy(todo.id, todo.title, todo.createdAt)
+                // 생성일 기준 내림차순 정렬 (최신순)
+                .orderBy(todo.createdAt.desc())
+                .offset(pageable.getOffset())
+                .limit(pageable.getPageSize())
+                .fetch();
+
+        // 전체 개수 조회: 조건에 맞는 Todo의 개수를 DISTINCT로 계산
+        Long total = jpaQueryFactory
+                .select(todo.countDistinct())
+                .from(todo)
+                .leftJoin(todo.managers, manager)
+                .leftJoin(manager.user, user)
+                .where(condition)
+                .fetchOne();
+
+        return new PageImpl<>(content, pageable, total != null ? total : 0L);
+    }
+}
+```
+```java
+@DataJpaTest
+@EnableJpaAuditing
+class TodoRepositoryQueryImplTest {
+
+    @TestConfiguration
+    static class QueryDslTestConfig {
+        @PersistenceContext
+        private EntityManager entityManager;
+
+        @Bean
+        public JPAQueryFactory jpaQueryFactory() {
+            return new JPAQueryFactory(entityManager);
+        }
+    }
+
+    @Autowired
+    private TodoRepository todoRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private CommentRepository commentRepository;
+
+    private void setData(){
+        User user = new User("test@example.com", "password", UserRole.ROLE_USER, "managerNickname");
+        userRepository.save(user);
+
+        Todo todo1 = new Todo("Sunny Task", "Contents 1", "Sunny", user);
+        ReflectionTestUtils.setField(todo1, "createdAt", LocalDateTime.now().plusSeconds(0));
+        Todo todo2 = new Todo("Cloudy Task", "Contents 2", "Cloudy", user);
+        ReflectionTestUtils.setField(todo2, "createdAt", LocalDateTime.now().plusSeconds(1));
+        Todo todo3 = new Todo("Rainy Task", "Contents 3", "Rainy", user);
+        ReflectionTestUtils.setField(todo3, "createdAt", LocalDateTime.now().plusSeconds(2));
+        Todo todo4 = new Todo("Another Sunny Task", "Contents 4", "Sunny", user);
+        ReflectionTestUtils.setField(todo4, "createdAt", LocalDateTime.now().plusSeconds(3));
+
+        todoRepository.save(todo1);
+        todoRepository.save(todo2);
+        todoRepository.save(todo3);
+        todoRepository.save(todo4);
+
+        Comment comment1 = new Comment("Contents 1", user, todo1);
+        Comment comment2 = new Comment("Contents 2", user, todo1);
+        Comment comment3 = new Comment("Contents 3", user, todo1);
+
+        commentRepository.save(comment1);
+        commentRepository.save(comment2);
+        commentRepository.save(comment3);
+    }
+
+    @Test
+    void findTodosByWeatherAndModifiedAtWithPages() {
+        // given
+        setData();
+
+        String weather = "Sunny";
+        LocalDateTime startTime = LocalDateTime.now().minusDays(1);
+        LocalDateTime endTime = LocalDateTime.now().plusDays(1);
+        Pageable pageable = PageRequest.of(0, 10);
+
+        // when
+        Page<TodoResponse> result = todoRepository.findTodosByWeatherAndModifiedAtWithPages(
+                weather, startTime, endTime, pageable
+        );
+
+        // then
+        assertThat(result.getTotalElements()).isEqualTo(2);
+        List<TodoResponse> responses = result.getContent();
+        responses.forEach(response -> assertThat(response.getWeather()).isEqualTo("Sunny"));
+    }
+
+    @Test
+    void searchTodosByTitleAndCreatedAtAndManagers() {
+        // given
+        setData();
+
+        String keywordTitle = "Task";
+        LocalDateTime startTime = LocalDateTime.now().minusDays(1);
+        LocalDateTime endTime = LocalDateTime.now().plusDays(1);
+        String keywordNickname = "managerNickname";
+        Pageable pageable = PageRequest.of(0, 10);
+
+        // when
+        Page<TodoSearchResponse> page = todoRepository.searchTodosByTitleAndCreatedAtAndManagers(
+                keywordTitle, startTime, endTime, keywordNickname, pageable
+        );
+
+        // then
+        assertThat(page.getTotalElements()).isEqualTo(4);
+        List<TodoSearchResponse> responses = page.getContent();
+        responses.forEach(response -> {
+            assertThat(response.getTitle()).contains("Task");
+            assertThat(response.getCountManagers()).isEqualTo(1);
+        });
+        assertThat(responses.get(3).getCountComments()).isEqualTo(3);
     }
 }
 ```

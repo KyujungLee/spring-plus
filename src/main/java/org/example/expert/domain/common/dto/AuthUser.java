@@ -13,12 +13,11 @@ public class AuthUser {
 
     private final Long userId;
     private final String email;
-    private final Collection<? extends GrantedAuthority> authorities;
+    private final UserRole userRole;
 
-    // Authority 를 복수로 받을 수 있도록 List로 변경
     public AuthUser(Long userId, String email, UserRole userRole) {
         this.userId = userId;
         this.email = email;
-        this.authorities = List.of(new SimpleGrantedAuthority(userRole.name()));
+        this.userRole = userRole;
     }
 }

@@ -2,13 +2,16 @@ package org.example.expert.config;
 
 import org.example.expert.domain.common.dto.AuthUser;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
+import java.util.List;
 
 public class JwtAuthenticationToken extends AbstractAuthenticationToken {
 
     private final AuthUser authUser;
 
     public JwtAuthenticationToken(AuthUser authUser){
-        super(authUser.getAuthorities());
+        super(List.of(new SimpleGrantedAuthority(authUser.getUserRole().name())));
         this.authUser = authUser;
         setAuthenticated(true);
     }
