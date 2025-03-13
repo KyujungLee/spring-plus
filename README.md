@@ -1031,3 +1031,160 @@ class TodoRepositoryQueryImplTest {
     }
 }
 ```
+
+## Lv.11 Transaction 심화
+
+파일위치:  
+package org.example.expert.domain.log.Log  
+package org.example.expert.domain.log.LogRepository  
+package org.example.expert.domain.log.LogService  
+package org.example.expert.domain.manager.service.ManagerService  
+package org.example.expert.domain.manager.service.ManagerServiceTest
+
+---
+
+### 1. 원인
+1. 요청사항 : 매니저 등록 요청시 로그 테이블에 로그남김
+
+### 2. 해결
+1. Log 엔티티 및 리포지토리 생성.
+2. LogService : `@Transactional(propagation = Propagation.REQUIRES_NEW)` 설정하여 ManagerService의 트랜잭션과는 별개로 동작.
+3. ManagerServiceTest : 매니저 등록 요청 실패 시 로그 저장 테스트 성공.
+
+## Fixed
+```java
+@Builder
+@Getter
+@Entity
+@NoArgsConstructor
+@AllArgsConstructor
+@Table(name = "log")
+@EntityListeners(AuditingEntityListener.class)
+public class Log {
+
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long requestUserId;
+
+    private Long targetTodoId;
+
+    private Long targetUserId;
+
+    @CreatedDate
+    @Column(updatable = false)
+    @Temporal(TemporalType.TIMESTAMP)
+    private LocalDateTime createdAt;
+}
+```
+```java
+public interface LogRepository extends JpaRepository<Log, Long> {
+}
+```
+```java
+@Service
+@RequiredArgsConstructor
+public class LogService {
+
+    private final LogRepository logRepository;
+    
+    // saveManager() 트랜잭션과 별개로 트랜잭션 할당
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void save(Long requestUserId, Long targetTodoId, Long targetUserId){
+        logRepository.save(
+                Log.builder()
+                .requestUserId(requestUserId)
+                .targetTodoId(targetTodoId)
+                .targetUserId(targetUserId)
+                .build()
+        );
+    }
+}
+```
+```java
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class ManagerService {
+
+    private final ManagerRepository managerRepository;
+    private final UserRepository userRepository;
+    private final TodoRepository todoRepository;
+    private final LogService logService;
+
+    @Transactional
+    public ManagerSaveResponse saveManager(AuthUser authUser, long todoId, ManagerSaveRequest managerSaveRequest) {
+        // Exception 발생 전 로그 저장
+        logService.save(authUser.getUserId(), todoId, managerSaveRequest.getManagerUserId());
+
+        // 일정을 만든 유저
+        User user = User.fromAuthUser(authUser);
+        Todo todo = todoRepository.findById(todoId)
+                .orElseThrow(() -> new InvalidRequestException("Todo not found"));
+
+        if (todo.getUser() == null || !ObjectUtils.nullSafeEquals(user.getId(), todo.getUser().getId())) {
+            throw new InvalidRequestException("담당자를 등록하려고 하는 유저가 유효하지 않거나, 일정을 만든 유저가 아닙니다.");
+        }
+
+        User managerUser = userRepository.findById(managerSaveRequest.getManagerUserId())
+                .orElseThrow(() -> new InvalidRequestException("등록하려고 하는 담당자 유저가 존재하지 않습니다."));
+
+        if (ObjectUtils.nullSafeEquals(user.getId(), managerUser.getId())) {
+            throw new InvalidRequestException("일정 작성자는 본인을 담당자로 등록할 수 없습니다.");
+        }
+
+        Manager newManagerUser = new Manager(managerUser, todo);
+        Manager savedManagerUser = managerRepository.save(newManagerUser);
+
+        return new ManagerSaveResponse(
+                savedManagerUser.getId(),
+                new UserResponse(managerUser.getId(), managerUser.getEmail())
+        );
+    }
+}
+```
+```java
+@DataJpaTest
+@Transactional
+@EnableJpaAuditing
+@Import({ManagerService.class, LogService.class})
+class ManagerServiceTest {
+
+    @TestConfiguration
+    static class QueryDslTestConfig {
+        @PersistenceContext
+        private EntityManager entityManager;
+
+        @Bean
+        public JPAQueryFactory jpaQueryFactory() {
+            return new JPAQueryFactory(entityManager);
+        }
+    }
+
+    @Autowired
+    private ManagerService managerService;
+
+    @Autowired
+    private LogRepository logRepository;
+
+    @Test
+    void 매니저_생성_실패해도_로그_남김() {
+        // given
+        AuthUser requestUser = new AuthUser(1L, "request@test.com", UserRole.ROLE_USER);
+        Long todoId = 1L;
+        ManagerSaveRequest managerSaveRequest = new ManagerSaveRequest(2L);
+
+        // when
+        assertThrows(Exception.class, () -> managerService.saveManager(requestUser, todoId, managerSaveRequest));
+
+        // then
+        List<Log> logs = logRepository.findAll();
+        assertThat(logs).hasSize(1);
+        Log log = logs.get(0);
+        assertThat(log.getRequestUserId()).isEqualTo(requestUser.getUserId());
+        assertThat(log.getTargetTodoId()).isEqualTo(todoId);
+        assertThat(log.getTargetUserId()).isEqualTo(managerSaveRequest.getManagerUserId());
+        assertThat(log.getCreatedAt()).isNotNull();
+    }
+}
+```
