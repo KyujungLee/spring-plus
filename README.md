@@ -1188,3 +1188,180 @@ class ManagerServiceTest {
     }
 }
 ```
+
+## Lv.12 AWS 활용
+
+파일위치:  
+package org.example.expert.config.S3Config  
+package org.example.expert.domain.image.ImageController  
+package org.example.expert.domain.image.ImageService  
+package org.example.expert.domain.image.S3Uploader  
+package org.example.expert.domain.image.ImageResponse
+
+---
+
+### 1. 원인
+1. 요구사항 : EC2 인스턴스 실행 (Elastic IP 설정, health check API 작성)
+2. 요구사항 : RDS 구축, EC2와 연결
+3. 요구사항 : S3 버킷으로 유저의 프로필 이미지 업로드 및 관리 API 작성
+
+### 2. 해결
+1. EC2 인스턴스 설정(Elastic IP 연결)
+![img_2.png](images/img_11.png)
+2. RDB 구축 및 위 인스턴스 연결
+![img_1.png](images/img_10.png)
+3. health check API 작성 (actuator 의존성 추가)
+4. S3 버켓 연동 및 인스턴스 생성(S3Config) -> ImageController 요청이 들어오면 S3Uploader 에서 이미지 업로드 -> ImageURL Response
+
+## Fixed
+```java
+// ...
+
+dependencies {
+
+    // ...
+    
+    // AWS S3
+    implementation 'org.springframework.cloud:spring-cloud-starter-aws:2.2.6.RELEASE'
+
+    // health check API (GET /actyator/health)
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+}
+
+// ...
+```
+```java
+@Configuration
+public class S3Config {
+
+    @Value("${cloud.aws.credentials.access-key}")
+    private String accessKey;
+
+    @Value("${cloud.aws.credentials.secret-key}")
+    private String secretKey;
+
+    @Value("${cloud.aws.region.static}")
+    private String region;
+
+    @Bean
+    public AmazonS3Client amazonS3Client() {
+        AWSCredentials basicAWSCredentials = new BasicAWSCredentials(accessKey, secretKey);
+        return (AmazonS3Client) AmazonS3ClientBuilder
+                .standard()
+                .withCredentials(new AWSStaticCredentialsProvider(basicAWSCredentials))
+                .withRegion(region)
+                .build();
+    }
+}
+```
+```java
+@RestController
+@RequiredArgsConstructor
+public class ImageController {
+
+    private final ImageService imageService;
+
+    @PostMapping("/upload")
+    public ResponseEntity<ImageResponse> uploadFile(MultipartFile imgFile) {
+        try {
+            return ResponseEntity.ok(imageService.saveFile(imgFile));
+        } catch (Exception e) {
+            return ResponseEntity.status(400).build();
+        }
+    }
+
+}
+```
+```java
+@Service
+@RequiredArgsConstructor
+public class ImageService {
+
+    private final S3Uploader s3Uploader;
+
+    public ImageResponse saveFile(MultipartFile imgFile) throws IOException {
+        if (!imgFile.isEmpty()) {
+            String storedFileName = s3Uploader.upload(imgFile, "images"); // s3 버킷에 images 디렉토리에 업로드
+            return new ImageResponse(storedFileName);
+        } else {
+            throw new IOException("이미지가 없습니다.");
+        }
+    }
+
+}
+```
+```java
+@Slf4j
+@RequiredArgsConstructor
+@Component
+@Service
+public class S3Uploader {
+
+    private final AmazonS3Client amazonS3Client;
+
+    @Value("${cloud.aws.s3.bucketName}")
+    private String bucket;
+
+    // MultipartFile을 전달받아 File로 전환한 후 S3에 업로드
+    public String upload(MultipartFile multipartFile, String dirName) throws IOException {
+        File uploadFile = convert(multipartFile)
+                .orElseThrow(() -> new IllegalArgumentException("MultipartFile -> File 전환 실패"));
+        return upload(uploadFile, dirName);
+    }
+
+    private String upload(File uploadFile, String dirName) {
+        String fileName = dirName + "/" + changedImageName(uploadFile.getName());
+        String uploadImageUrl = putS3(uploadFile, fileName);
+        removeNewFile(uploadFile); // 로컬에 생성된 File 삭제 (MultipartFile -> File 전환 하며 로컬에 파일 생성됨)
+
+        return uploadImageUrl; // 업로드된 파일의 S3 URL 주소 반환
+    }
+
+    // 실질적인 s3 업로드 부분
+    private String putS3(File uploadFile, String fileName) {
+        amazonS3Client.putObject(
+                new PutObjectRequest(bucket, fileName, uploadFile)
+                        .withCannedAcl(CannedAccessControlList.PublicRead) // PublicRead 권한으로 업로드
+        );
+        return amazonS3Client.getUrl(bucket, fileName).toString();
+    }
+
+    private void removeNewFile(File targetFile) {
+        if (targetFile.delete()) {
+            log.info("파일이 삭제되었습니다.");
+        } else {
+            log.info("파일이 삭제되지 못했습니다.");
+        }
+    }
+
+    private Optional<File> convert(MultipartFile file) throws IOException {
+        File convertFile = new File(file.getOriginalFilename());
+        if (convertFile.createNewFile()) {
+            try (FileOutputStream fos = new FileOutputStream(convertFile)) {
+                fos.write(file.getBytes());
+            }
+            return Optional.of(convertFile);
+        }
+        return Optional.empty();
+    }
+
+    // 랜덤 파일 이름 메서드 (파일 이름 중복 방지)
+    private String changedImageName(String originName) {
+        String random = UUID.randomUUID().toString();
+        return random + originName;
+    }
+
+}
+```
+```java
+@Getter
+public class ImageResponse {
+    
+    private final String imageURL;
+
+    public ImageResponse(String imageURL) {
+        this.imageURL = imageURL;
+    }
+}
+```
