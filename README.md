@@ -70,7 +70,10 @@ package org.example.expert.domain.auth.service.AuthService
 
 ### 2. 해결
 ![img_6.png](images/img_6.png)
+<p align="center"><b>그림 1. Token 발급</b></p>
+
 ![img_7.png](images/img_7.png)
+<p align="center"><b>그림 2. Token에 포함된 Claims</b></p>
 
 
 1. User Entity에 nickname 필드 추가.
@@ -216,6 +219,8 @@ package org.example.expert.domain.todo.repository.TodoRepository
 
 ### 2. 해결
 ![img_8.png](images/img_8.png)
+<p align="center"><b>그림 1. POSTMAN 조회결과 확인</b></p>
+
 1. weather 와 수정일 쿼리 파라미터로 받을 수 있도록 추가
 2. JPQL에서, 각 조건이 null이면 where 을 건너뛰도록 작성
 
@@ -395,6 +400,8 @@ package org.example.expert.domain.todo.entity.Todo
 
 ### 2. 해결
 ![img_1.png](images/img_9.png)
+<p align="center"><b>그림 1. Todo 단건조회 성공</b></p>
+
 1. 해당 매니저 객체를 영속성 컨텍스트에 포함시켜 Manager Table 에 저장하기 위해 CascadeType.PERSIST 설정.
 
 ## Fixed
@@ -1208,8 +1215,12 @@ package org.example.expert.domain.image.ImageResponse
 ### 2. 해결
 1. EC2 인스턴스 설정(Elastic IP 연결)
 ![img_2.png](images/img_11.png)
+<p align="center"><b>그림 1. EC2 인스턴스 설정</b></p>
+
 2. RDB 구축 및 위 인스턴스 연결
 ![img_1.png](images/img_10.png)
+<p align="center"><b>그림 2. RDB 구축 및 인스턴스 연결 설정</b></p>
+
 3. health check API 작성 (actuator 의존성 추가)
 4. S3 버켓 연동 및 인스턴스 생성(S3Config) -> ImageController 요청이 들어오면 S3Uploader 에서 이미지 업로드 -> ImageURL Response
 
@@ -1363,5 +1374,386 @@ public class ImageResponse {
     public ImageResponse(String imageURL) {
         this.imageURL = imageURL;
     }
+}
+```
+
+## Lv.13 대용량 데이터 처리
+
+파일위치:  
+package org.example.expert.domain.user.repository.UserRepositoryTest  
+package org.example.expert.domain.user.controller.UserController  
+package org.example.expert.domain.user.service.UserService  
+package org.example.expert.domain.user.repository.UserRepositoryQueryImpl  
+package org.example.expert.domain.user.entity.User
+
+---
+
+### 1. 원인
+1. 요구사항 : 유저 100만건의 닉네임 기준 검색 API 제작
+2. 제한사항 : 여러 방법으로 조회 속도 개선
+
+### 2. 실험조건
+1. Set 활용하여 중복없는 닉네임 유저 생성 (MySQL 저장, 6분 39초 소요) - 10000개씩 나눠서 save + EntityManager로 메모리 관리
+```java
+@DataJpaTest
+@Transactional
+@Rollback(false)
+@Import(QueryDslTestConfig.class)
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+class UserRepositoryTest {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+
+    private static final String[] firstName = {"김", "이", "최", "박", "석", "신", "전", "조", "정", "원"};
+    private static final String[] middleName = {"규", "민", "승", "연", "기", "한", "정", "영", "용", "의"};
+    private static final String[] lastName = {"정", "홍", "걸", "환", "빈", "준", "용", "진", "은", "지", ""};
+    private static final Random random = new Random();
+
+    private static final int BATCH_SIZE = 10000;
+
+
+    @Test
+    void 유저_100만건_생성_성공() {
+        int totalCount = 1_000_000;
+        Set<String> uniqueNicknames = new HashSet<>();
+        List<User> batchUsers = new ArrayList<>();
+
+        while (uniqueNicknames.size() < totalCount) {
+            String nickname = firstName[random.nextInt(firstName.length)] +
+                    middleName[random.nextInt(middleName.length)] +
+                    lastName[random.nextInt(lastName.length)] +
+                    random.nextInt(10000);
+
+            if (uniqueNicknames.add(nickname)) {
+                User user = new User();
+                ReflectionTestUtils.setField(user, "nickname", nickname);
+                batchUsers.add(user);
+            }
+
+            // Batch Insert 처리
+            if (batchUsers.size() >= BATCH_SIZE) {
+                userRepository.saveAll(batchUsers);
+                entityManager.flush();
+                entityManager.clear();
+                batchUsers.clear();
+            }
+        }
+
+        // 남은 데이터 저장
+        if (!batchUsers.isEmpty()) {
+            userRepository.saveAll(batchUsers);
+            entityManager.flush();
+            entityManager.clear();
+        }
+    }
+}
+```
+2. DB의 제일 첫번째, 중간, 제일 마지막 데이터 기준 찾기 조건 설정
+3. 조건별 조회를 100회 반복 -> 조회시간 평균, 편차 확인
+4. 조회조건 :  (1) 순수 JPA / (2) QueryDSL / (3) JPQL
+
+```java
+List<User> findByNickname(String nickname);
+```
+```java
+jpaQueryFactory
+        .selectFrom(user)
+        .where(user.nickname.eq(targetNickname))
+        .fetch();
+```
+```java
+@Query(value = "select u.nickname from User u where u.nickname = :nickname")
+List<String> findByNicknameJPQL(@Param("nickname") String nickname);
+```
+
+
+5. 실험코드
+```java
+@DataJpaTest
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Import(QueryDslTestConfig.class)
+class UserRepositoryTest {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private JPAQueryFactory jpaQueryFactory;
+
+    // ...
+    private static final String firstNickname = "신정용2130";
+    private static final String middleNickname = "원용용2341";
+    private static final String lastNickname = "전승홍903";
+
+    @Test
+    void 유저_닉네임_조회_성능_분석() {
+        String targetNickname = firstNickname;
+        int repeatCount = 100;
+
+        List<Long> durationsJPA = new ArrayList<>();
+        List<Long> durationsQueryDSL = new ArrayList<>();
+        List<Long> durationsJPQL = new ArrayList<>();
+
+        // 반복하여 조회 및 시간 측정
+        for (int i = 0; i < repeatCount; i++) {
+            entityManager.clear();
+
+            // JPA
+            long startJpa = System.currentTimeMillis();
+            userRepository.findByNickname(targetNickname);
+            durationsJPA.add(System.currentTimeMillis() - startJpa);
+
+            entityManager.clear();
+
+            // QueryDSL
+            long startDsl = System.currentTimeMillis();
+            jpaQueryFactory.selectFrom(user)
+                    .where(user.nickname.eq(targetNickname))
+                    .fetch();
+            durationsQueryDSL.add(System.currentTimeMillis() - startDsl);
+
+            entityManager.clear();
+
+            // JPQL
+            long startJPQL = System.currentTimeMillis();
+            userRepository.findByNicknameJPQL(targetNickname);
+            durationsJPQL.add(System.currentTimeMillis() - startJPQL);
+
+            entityManager.clear();
+        }
+
+        // 성능 분석 결과 출력
+        System.out.println("===================== 성능 측정 결과 =====================");
+        printStatistics("JPA", durationsJPA);
+        printStatistics("QueryDSL", durationsQueryDSL);
+        printStatistics("JPQL", durationsJPQL);
+
+        assertThat(durationsJPQL).isNotNull();
+    }
+
+    private void printStatistics(String method, List<Long> durations) {
+        double average = durations.stream().mapToLong(Long::longValue).average().orElse(0);
+        long max = durations.stream().mapToLong(Long::longValue).max().orElse(0);
+        long min = durations.stream().mapToLong(Long::longValue).min().orElse(0);
+        double stddev = calculateStdDev(durations, average);
+
+        System.out.printf("=== [%s] 조회 시간 통계 ===%n", method);
+        System.out.printf("평균: %.2fms, 최대: %dms, 최소: %dms, 표준편차: %.2fms%n", average, max, min, stddev);
+    }
+
+    private double calculateStdDev(List<Long> durations, double average) {
+        double sum = 0;
+        for (long duration : durations) {
+            sum += Math.pow(duration - average, 2);
+        }
+        return Math.sqrt(sum / durations.size());
+    }
+
+}
+```
+
+### 3. 결과
+1. firstNickname
+```java
+===================== 성능 측정 결과 =====================
+=== [JPA] 조회 시간 통계 ===
+평균: 671.06ms, 최대: 2175ms, 최소: 507ms, 표준편차: 280.50ms
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 687.77ms, 최대: 2316ms, 최소: 506ms, 표준편차: 300.70ms
+=== [JPQL] 조회 시간 통계 ===
+평균: 405.48ms, 최대: 1925ms, 최소: 305ms, 표준편차: 216.43ms
+```
+2. middleNickname
+```java
+===================== 성능 측정 결과 =====================
+=== [JPA] 조회 시간 통계 ===
+평균: 727.59ms, 최대: 2578ms, 최소: 517ms, 표준편차: 367.87ms
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 719.15ms, 최대: 2092ms, 최소: 514ms, 표준편차: 362.25ms
+=== [JPQL] 조회 시간 통계 ===
+평균: 415.60ms, 최대: 1518ms, 최소: 309ms, 표준편차: 210.16ms
+
+```
+3. lastNickname
+```java
+===================== 성능 측정 결과 =====================
+=== [JPA] 조회 시간 통계 ===
+평균: 579.02ms, 최대: 924ms, 최소: 521ms, 표준편차: 70.72ms
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 576.37ms, 최대: 1023ms, 최소: 519ms, 표준편차: 76.47ms
+=== [JPQL] 조회 시간 통계 ===
+평균: 346.00ms, 최대: 504ms, 최소: 317ms, 표준편차: 35.84ms
+```
+
+1. 데이터 위치별 평균 조회 소요시간 : middle > first > last
+2. 조회 조건 별 평균 조회 소요시간 : JPA = QueryDSL > JPQL
+
+- JPA와 QueryDSL은 User 전체를 조회, JPQL은 User의 Nickname 만 조회한 결과로 보임.
+
+### 4. JPA vs QueryDSL (조회조건 수정)
+1. QueryDSL 의 조건 수정 (User.nickname 조회)
+```java
+jpaQueryFactory
+        .select(user.nickname)
+        .from(user)
+        .where(user.nickname.eq(targetNickname))
+        .fetch();
+```
+
+### 5. 결과
+1. firstNickname
+```java
+===================== 성능 측정 결과 =====================
+=== [JPA] 조회 시간 통계 ===
+평균: 565.82ms, 최대: 875ms, 최소: 519ms, 표준편차: 50.01ms
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 339.17ms, 최대: 487ms, 최소: 313ms, 표준편차: 29.32ms
+```
+2. middleNickname
+```java
+===================== 성능 측정 결과 =====================
+=== [JPA] 조회 시간 통계 ===
+평균: 547.51ms, 최대: 724ms, 최소: 513ms, 표준편차: 31.99ms
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 330.37ms, 최대: 482ms, 최소: 311ms, 표준편차: 21.55ms
+```
+3. lastNickname
+```java
+===================== 성능 측정 결과 =====================
+=== [JPA] 조회 시간 통계 ===
+평균: 550.57ms, 최대: 737ms, 최소: 517ms, 표준편차: 33.17ms
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 335.95ms, 최대: 470ms, 최소: 316ms, 표준편차: 23.91ms
+```
+
+1. 데이터 위치별 평균 조회 소요시간 : middle = first = last (큰 차이 없음)
+2. 조회 조건 별 평균 조회 소요시간 : JPA > QueryDSL
+
+![InnoDB 아키텍쳐](img_4.png)
+<p align="center"><b>그림 1. InnoDB 아키텍쳐</b></p>
+
+![DBMS의 버퍼풀 구조](img_3.png)
+<p align="center"><b>그림 2. DBMS의 버퍼풀 구조</b></p>
+
+- 확실히 조회 데이터 값이 줄어드니 조회시간이 약 40% 단축됨.
+- 첫번째 실험결과와 비교해봤을때, 동일한 조회 조건이였던 JPA 조차 데이터의 위치와 상관없이 조회성능이 좋아짐.
+  - DBMS는 데이터를 가져올 때, 바로 디스크(실제 데이터가 저장된 물리적 하드디스크)에서 데이터를 가져오는 게 아니라, 우선 메모리 상에 있는 캐시(버퍼 풀)에서 데이터를 찾음.
+  - 첫번째 실험에서는 JPA(User) -> QueryDSL(User) -> JPQL(User.nickname) 조회에서, 처음 몇번 조회 시 데이터가 메모리에 없으면 DBMS의 디스크 I/O 가 계속 발생하여 조회시간이 증가한 것으로 보임.
+  - 이후 조회에서는 데이터가 메모리 캐시에 존재해서 훨씬 빠른 속도를 보인 것으로 생각되며, 이는 두번째 실험의 결과도 설명할 수 있음.
+- 데이터 위치에 따른 성능차이
+  - MySQL에서 인덱스는 B-Tree 구조로 관리되는데, 각 노드를 탐색하므로 트리의 높이에 따라 성능이 달라짐.
+  - 100만건정도면 깊이는 대체로 비슷하다고 함. 즉 데이터의 논리적 위치와 실제 인덱스 검색성능은 무관함.
+  - 다만 lastNickname은 가능 최근에 삽입되었기 때문에 버퍼풀에 이미 캐싱되어 있을 가능성이 큼. 따라서 조회 속도가 빠르게 측정됨.
+  - 반면, middleNickname은 상대적으로 오래전에 삽입되었기 때문에 캐시에서 빠져있을 가능성이 있음. 따라서 조회 속도가 느리게 측정됨.
+  - 두번째 실험에서는 데이터 위치에 따른 성능차이가 거의 없는 것으로 설명 가능함.
+
+
+### 6. QueryDSL vs JPQL (둘다 User.nickname 조회)
+1. firstNickname
+```java
+===================== 성능 측정 결과 =====================
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 339.70ms, 최대: 635ms, 최소: 299ms, 표준편차: 68.58ms
+=== [JPQL] 조회 시간 통계 ===
+평균: 348.17ms, 최대: 1260ms, 최소: 300ms, 표준편차: 118.56ms
+```
+2. middleNickname
+```java
+===================== 성능 측정 결과 ===================== 
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 366.34ms, 최대: 1125ms, 최소: 298ms, 표준편차: 104.78ms
+=== [JPQL] 조회 시간 통계 ===
+평균: 391.51ms, 최대: 2053ms, 최소: 297ms, 표준편차: 256.51ms
+```
+3. lastNickname
+```java
+===================== 성능 측정 결과 =====================
+=== [QueryDSL] 조회 시간 통계 ===
+평균: 334.96ms, 최대: 706ms, 최소: 314ms, 표준편차: 40.79ms
+=== [JPQL] 조회 시간 통계 ===
+평균: 335.07ms, 최대: 553ms, 최소: 314ms, 표준편차: 31.77ms
+```
+
+1. 데이터 위치별 평균 조회 소요시간 : middle = first = last (큰 차이 없음)
+2. 조회 조건 별 평균 조회 소요시간 : JPA = QueryDSL (큰 차이 없음)
+
+### 7. 결론
+1. 데이터의 위치에 따른 조회성능은 큰 차이 없음.
+2. User 객체를 조회하는 것 보단, User의 필드값을 조회하는 게 조회속도가 빠름.
+3. 단순히 엔티티의 필드값을 동일하게 조회하는 경우, JPQL과 QueryDSL 간의 큰 성능 차이는 없음.
+
+### 8. 참고자료 
+- https://code-run.tistory.com/84
+
+## Fixed
+```java
+@RestController
+@RequiredArgsConstructor
+public class UserController {
+
+    private final UserService userService;
+  
+    // ...
+    
+    @GetMapping("/users")
+    public ResponseEntity<UserSearchResponse> searchUser(
+            @RequestParam String nickname
+    ){
+        return ResponseEntity.ok(userService.searchUser(nickname));
+    }
+}
+```
+```java
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class UserService {
+
+    private final UserRepository userRepository;
+    
+    // ...
+    
+    public UserSearchResponse searchUser(String nickname) {
+        return userRepository.findNicknameByNickname(nickname);
+    }
+}
+```
+```java
+@RequiredArgsConstructor
+public class UserRepositoryQueryImpl implements UserRepositoryQuery{
+
+    private final JPAQueryFactory jpaQueryFactory;
+
+    @Override
+    public UserSearchResponse findNicknameByNickname(String nickname) {
+        return jpaQueryFactory
+                .select(Projections.constructor(
+                        UserSearchResponse.class, 
+                        user.nickname
+                ))
+                .from(user)
+                .where(user.nickname.eq(nickname))
+                .fetchOne();
+    }
+}
+```
+```java
+@Getter
+@Entity
+@NoArgsConstructor
+@Table(name = "users")
+public class User extends Timestamped {
+
+    // ...
+    
+    @Column(unique = true) // 중복방지
+    private String nickname; // nickname 필드 추가
+
+    // ...
 }
 ```

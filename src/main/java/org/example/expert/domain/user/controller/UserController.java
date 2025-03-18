@@ -5,6 +5,7 @@ import org.example.expert.domain.common.annotation.Auth;
 import org.example.expert.domain.common.dto.AuthUser;
 import org.example.expert.domain.user.dto.request.UserChangePasswordRequest;
 import org.example.expert.domain.user.dto.response.UserResponse;
+import org.example.expert.domain.user.dto.response.UserSearchResponse;
 import org.example.expert.domain.user.service.UserService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -30,5 +31,12 @@ public class UserController {
     @PatchMapping("/users")
     public void updateNickname(@AuthenticationPrincipal AuthUser authUser, @RequestParam String nickname){
         userService.updateNickname(authUser.getUserId(), nickname);
+    }
+
+    @GetMapping("/users")
+    public ResponseEntity<UserSearchResponse> searchUser(
+            @RequestParam String nickname
+    ){
+        return ResponseEntity.ok(userService.searchUser(nickname));
     }
 }

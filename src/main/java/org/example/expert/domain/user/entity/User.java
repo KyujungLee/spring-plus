@@ -20,6 +20,7 @@ public class User extends Timestamped {
     private String password;
     @Enumerated(EnumType.STRING)
     private UserRole userRole;
+    @Column(unique = true) // 중복방지
     private String nickname; // nickname 필드 추가
 
 
